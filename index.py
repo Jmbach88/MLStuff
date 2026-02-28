@@ -83,6 +83,7 @@ def add_to_index(index: faiss.IndexFlatIP, chunk_map: list[dict],
             "circuit": c.get("circuit", ""),
             "date_issued": c.get("date_issued", ""),
             "statutes": c.get("statutes", ""),
+            "text": c.get("text", ""),
         })
 
     logger.info(f"Added {len(chunks)} vectors (total: {index.ntotal})")
