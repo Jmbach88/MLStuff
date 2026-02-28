@@ -1,0 +1,78 @@
+import os
+import logging
+from datetime import datetime, timezone
+
+from sqlalchemy import (
+    Column, Integer, Text, ForeignKey, UniqueConstraint,
+    create_engine, inspect
+)
+from sqlalchemy.orm import declarative_base, relationship, Session
+
+import config
+
+logger = logging.getLogger(__name__)
+
+Base = declarative_base()
+
+
+class Statute(Base):
+    __tablename__ = "statutes"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    key = Column(Text, unique=True, nullable=False)
+    name = Column(Text, nullable=False)
+    opinions = relationship("Opinion", secondary="opinion_statutes", back_populates="statutes")
+
+
+class Opinion(Base):
+    __tablename__ = "opinions"
+    id = Column(Integer, primary_key=True)
+    package_id = Column(Text, unique=True, nullable=False)
+    title = Column(Text, nullable=False)
+    court_name = Column(Text)
+    court_type = Column(Text)
+    circuit = Column(Text)
+    date_issued = Column(Text)
+    plain_text = Column(Text)
+    pdf_url = Column(Text)
+    synced_at = Column(Text)
+    chunked = Column(Integer, default=0)
+    statutes = relationship("Statute", secondary="opinion_statutes", back_populates="opinions")
+    sections = relationship("FDCPASection", back_populates="opinion")
+
+
+class OpinionStatute(Base):
+    __tablename__ = "opinion_statutes"
+    opinion_id = Column(Integer, ForeignKey("opinions.id"), primary_key=True)
+    statute_id = Column(Integer, ForeignKey("statutes.id"), primary_key=True)
+
+
+class FDCPASection(Base):
+    __tablename__ = "fdcpa_sections"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    opinion_id = Column(Integer, ForeignKey("opinions.id"), nullable=False)
+    subsection = Column(Text, nullable=False)
+    description = Column(Text)
+    opinion = relationship("Opinion", back_populates="sections")
+    __table_args__ = (
+        UniqueConstraint("opinion_id", "subsection", name="uq_opinion_subsection"),
+    )
+
+
+def get_local_engine():
+    db_path = os.environ.get("ML_LOCAL_DB", config.LOCAL_DB)
+    if db_path == ":memory:":
+        return create_engine("sqlite:///:memory:")
+    return create_engine(f"sqlite:///{db_path}")
+
+
+def init_local_db(engine=None):
+    if engine is None:
+        engine = get_local_engine()
+    Base.metadata.create_all(engine)
+    return engine
+
+
+def get_session(engine=None):
+    if engine is None:
+        engine = get_local_engine()
+    return Session(engine)
