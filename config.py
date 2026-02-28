@@ -4,7 +4,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent
 SOURCE_DB = "C:/PythonProject/cld/fdcpa.db"
 LOCAL_DB = str(PROJECT_ROOT / "data" / "opinions.db")
-CHROMA_DIR = str(PROJECT_ROOT / "data" / "chroma_db")
+FAISS_INDEX = str(PROJECT_ROOT / "data" / "faiss_index.bin")
+FAISS_MAP = str(PROJECT_ROOT / "data" / "faiss_chunk_map.json")
 CHECKPOINT_DIR = str(PROJECT_ROOT / "data" / "checkpoints")
 
 # Embedding
