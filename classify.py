@@ -389,11 +389,55 @@ def predict_claim_types(engine=None):
     return count
 
 
+def update_chunk_map_with_predictions(engine=None):
+    """Add predicted_outcome and claim_sections to existing FAISS chunk_map."""
+    if engine is None:
+        engine = get_local_engine()
+
+    from index import load_index, save_index
+
+    index, chunk_map = load_index()
+    if index is None:
+        logger.error("No FAISS index found")
+        return 0
+
+    session = get_session(engine)
+
+    outcome_rows = session.execute(text(
+        "SELECT opinion_id, predicted_value FROM predictions "
+        "WHERE model_name = 'outcome_logreg_v1' AND label_type = 'outcome'"
+    )).fetchall()
+    outcome_map = {r[0]: r[1] for r in outcome_rows}
+
+    claim_rows = session.execute(text(
+        "SELECT opinion_id, predicted_value FROM predictions "
+        "WHERE model_name = 'claim_type_logreg_v1' AND label_type = 'claim_type'"
+    )).fetchall()
+    claim_map = {}
+    for oid, section in claim_rows:
+        claim_map.setdefault(oid, []).append(section)
+
+    session.close()
+
+    updated = 0
+    for entry in chunk_map:
+        oid = entry["opinion_id"]
+        entry["predicted_outcome"] = outcome_map.get(oid, "")
+        sections = claim_map.get(oid, [])
+        entry["claim_sections"] = ",".join(sorted(sections))
+        updated += 1
+
+    save_index(index, chunk_map)
+    logger.info(f"Updated {updated} chunk_map entries with predictions")
+    return updated
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     parser = argparse.ArgumentParser(description="Train and predict with classifiers")
     parser.add_argument("--train-only", action="store_true")
     parser.add_argument("--predict-only", action="store_true")
+    parser.add_argument("--update-index", action="store_true", help="Update FAISS chunk_map with predictions")
     args = parser.parse_args()
 
     engine = get_local_engine()
@@ -416,3 +460,8 @@ if __name__ == "__main__":
         print("\n=== Predicting Claim Types ===")
         n = predict_claim_types(engine)
         print(f"Predicted {n} opinions")
+
+    if args.update_index:
+        print("\n=== Updating FAISS Index Metadata ===")
+        n = update_chunk_map_with_predictions(engine)
+        print(f"Updated {n} chunk_map entries")

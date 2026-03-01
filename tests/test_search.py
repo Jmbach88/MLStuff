@@ -67,3 +67,31 @@ def test_search_with_statute_filter(search_index):
     )
     for r in results:
         assert "TCPA" in r["statutes"]
+
+
+def test_search_with_outcome_filter(search_index):
+    from search import search_opinions
+    index, chunk_map = search_index
+    for entry in chunk_map:
+        entry["predicted_outcome"] = "plaintiff_win"
+    chunk_map[2]["predicted_outcome"] = "defendant_win"
+
+    results = search_opinions(
+        index, chunk_map, "violation", filters={"predicted_outcome": "plaintiff_win"}
+    )
+    for r in results:
+        assert r.get("predicted_outcome") == "plaintiff_win"
+
+
+def test_search_with_claim_section_filter(search_index):
+    from search import search_opinions
+    index, chunk_map = search_index
+    chunk_map[0]["claim_sections"] = "1692e,1692f"
+    chunk_map[1]["claim_sections"] = "1692e,1692f"
+    chunk_map[2]["claim_sections"] = "227"
+
+    results = search_opinions(
+        index, chunk_map, "violation", filters={"claim_section": "1692e"}
+    )
+    for r in results:
+        assert "1692e" in r.get("claim_sections", "")

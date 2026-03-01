@@ -75,6 +75,8 @@ def search_opinions(
                 "best_passage": meta.get("text", ""),
                 "chunk_index": meta.get("chunk_index", 0),
                 "chunk_id": meta.get("chunk_id", ""),
+                "predicted_outcome": meta.get("predicted_outcome", ""),
+                "claim_sections": meta.get("claim_sections", ""),
             }
 
     # Sort by similarity descending, take top_k
@@ -109,6 +111,15 @@ def _passes_filters(meta: dict, filters: dict) -> bool:
 
     if filters.get("opinion_ids"):
         if meta.get("opinion_id") not in filters["opinion_ids"]:
+            return False
+
+    if filters.get("predicted_outcome"):
+        if meta.get("predicted_outcome") != filters["predicted_outcome"]:
+            return False
+
+    if filters.get("claim_section"):
+        claim_sections = meta.get("claim_sections", "")
+        if filters["claim_section"] not in claim_sections:
             return False
 
     return True
