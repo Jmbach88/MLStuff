@@ -78,3 +78,33 @@ def label_outcome(text_content: str) -> dict:
     else:
         # Tie with some signals -- default to mixed
         return {"label": "mixed", "confidence": 0.5}
+
+
+# ---------------------------------------------------------------------------
+# Claim type labeling patterns
+# ---------------------------------------------------------------------------
+
+SECTION_PATTERNS = [
+    re.compile(r'\u00a7\s*(1692[a-p](?:-\d+)?)', re.IGNORECASE),
+    re.compile(r'\u00a7\s*(227)', re.IGNORECASE),
+    re.compile(r'\u00a7\s*(1681[a-x](?:-\d+)?)', re.IGNORECASE),
+    re.compile(r'section\s+(1692[a-p](?:-\d+)?)', re.IGNORECASE),
+    re.compile(r'section\s+(227)', re.IGNORECASE),
+    re.compile(r'section\s+(1681[a-x](?:-\d+)?)', re.IGNORECASE),
+    re.compile(r'\d+\s+U\.?S\.?C\.?\s+\u00a7?\s*(1692[a-p](?:-\d+)?)', re.IGNORECASE),
+    re.compile(r'\d+\s+U\.?S\.?C\.?\s+\u00a7?\s*(227)', re.IGNORECASE),
+    re.compile(r'\d+\s+U\.?S\.?C\.?\s+\u00a7?\s*(1681[a-x](?:-\d+)?)', re.IGNORECASE),
+]
+
+
+def label_claim_types(text_content: str) -> list:
+    """Extract statutory section references from opinion text.
+
+    Returns a sorted, deduplicated list of section identifiers.
+    """
+    found = set()
+    for pattern in SECTION_PATTERNS:
+        for match in pattern.finditer(text_content):
+            section = match.group(1).lower()
+            found.add(section)
+    return sorted(found)
