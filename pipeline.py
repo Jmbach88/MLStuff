@@ -122,10 +122,19 @@ def run_pipeline(sync_only=False, reindex=False):
             processed += len(batch)
             continue
 
-        # Embed
+        # Embed in sub-batches to avoid MemoryError on large batches
         texts = [c["text"] for c in all_chunks]
         logger.info(f"Embedding {len(texts)} chunks (batch {batch_start // CHECKPOINT_BATCH + 1})...")
-        embeddings = embed_chunks(texts)
+        EMBED_SUB_BATCH = 5000
+        if len(texts) <= EMBED_SUB_BATCH:
+            embeddings = embed_chunks(texts)
+        else:
+            sub_embeddings = []
+            for sub_start in range(0, len(texts), EMBED_SUB_BATCH):
+                sub_texts = texts[sub_start:sub_start + EMBED_SUB_BATCH]
+                logger.info(f"  Sub-batch {sub_start // EMBED_SUB_BATCH + 1}: {len(sub_texts)} chunks")
+                sub_embeddings.append(embed_chunks(sub_texts))
+            embeddings = np.vstack(sub_embeddings)
 
         # Save checkpoint
         checkpoint_name = f"batch_{batch_start}"
