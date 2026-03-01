@@ -90,6 +90,63 @@ class TestClaimTypeLabeling:
         assert result.count("1692e") == 1
 
 
+class TestExpandedOutcomePatterns:
+    def test_motion_to_dismiss_granted(self):
+        text = "Defendant's motion to dismiss is hereby granted."
+        result = label_outcome(text)
+        assert result["label"] == "defendant_win"
+
+    def test_motion_to_dismiss_denied(self):
+        text = "The motion to dismiss filed by defendant is denied."
+        result = label_outcome(text)
+        assert result["label"] == "plaintiff_win"
+
+    def test_order_granting_motion_to_dismiss(self):
+        text = "ORDER GRANTING DEFENDANT'S MOTION TO DISMISS."
+        result = label_outcome(text)
+        assert result["label"] == "defendant_win"
+
+    def test_order_denying_motion_to_dismiss(self):
+        text = "ORDER DENYING MOTION TO DISMISS."
+        result = label_outcome(text)
+        assert result["label"] == "plaintiff_win"
+
+    def test_default_judgment(self):
+        text = "Default judgment is entered against the defendant in the amount of $5,000."
+        result = label_outcome(text)
+        assert result["label"] == "plaintiff_win"
+
+    def test_affirmed_low_weight(self):
+        text = "The judgment of the district court is AFFIRMED."
+        result = label_outcome(text)
+        assert result["label"] == "defendant_win"
+
+    def test_reversed_low_weight(self):
+        text = "The district court's order is REVERSED."
+        result = label_outcome(text)
+        assert result["label"] == "plaintiff_win"
+
+    def test_affirmed_in_part_reversed_in_part(self):
+        text = "The judgment is AFFIRMED IN PART and REVERSED IN PART."
+        result = label_outcome(text)
+        assert result["label"] == "mixed"
+
+    def test_vacated_and_remanded(self):
+        text = "The order is VACATED and REMANDED for further proceedings."
+        result = label_outcome(text)
+        assert result["label"] == "mixed"
+
+    def test_settled(self):
+        text = "The parties have reached a settlement. The case is dismissed pursuant to stipulation."
+        result = label_outcome(text)
+        assert result["label"] == "settled"
+
+    def test_voluntary_dismissal(self):
+        text = "Pursuant to the parties' stipulation of voluntary dismissal, this case is closed."
+        result = label_outcome(text)
+        assert result["label"] == "settled"
+
+
 class TestBatchLabeling:
     def _setup_opinions(self):
         engine = get_local_engine()

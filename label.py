@@ -19,6 +19,10 @@ PLAINTIFF_WIN_PATTERNS = [
     (re.compile(r"damages\s+(are\s+)?awarded", re.IGNORECASE), 1),
     (re.compile(r"finds?\s+(for|in\s+favor\s+of)\s+plaintiff", re.IGNORECASE), 2),
     (re.compile(r"verdict\s+(for|in\s+favor\s+of)\s+plaintiff", re.IGNORECASE), 2),
+    (re.compile(r"motion\s+to\s+dismiss.*(?:is\s+)?denied", re.IGNORECASE), 2),
+    (re.compile(r"order\s+denying.*motion\s+to\s+dismiss", re.IGNORECASE), 2),
+    (re.compile(r"default\s+judgment.*(?:is\s+)?entered", re.IGNORECASE), 2),
+    (re.compile(r"\breversed\b", re.IGNORECASE), 1),
 ]
 
 DEFENDANT_WIN_PATTERNS = [
@@ -30,6 +34,9 @@ DEFENDANT_WIN_PATTERNS = [
     (re.compile(r"dismissed\s+with\s+prejudice", re.IGNORECASE), 1),
     (re.compile(r"finds?\s+(for|in\s+favor\s+of)\s+defendant", re.IGNORECASE), 2),
     (re.compile(r"verdict\s+(for|in\s+favor\s+of)\s+defendant", re.IGNORECASE), 2),
+    (re.compile(r"motion\s+to\s+dismiss.*(?:is\s+)?(?:hereby\s+)?granted", re.IGNORECASE), 2),
+    (re.compile(r"order\s+granting.*motion\s+to\s+dismiss", re.IGNORECASE), 2),
+    (re.compile(r"\baffirmed\b", re.IGNORECASE), 1),
 ]
 
 MIXED_PATTERNS = [
@@ -37,6 +44,17 @@ MIXED_PATTERNS = [
     (re.compile(r"denied\s+in\s+part\s+and\s+granted\s+in\s+part", re.IGNORECASE), 3),
     (re.compile(r"partial\s+summary\s+judgment", re.IGNORECASE), 2),
     (re.compile(r"granted\s+in\s+part", re.IGNORECASE), 2),
+    (re.compile(r"affirmed\s+in\s+part.*reversed\s+in\s+part", re.IGNORECASE), 3),
+    (re.compile(r"reversed\s+in\s+part.*affirmed\s+in\s+part", re.IGNORECASE), 3),
+    (re.compile(r"vacated\s+and\s+remanded", re.IGNORECASE), 2),
+]
+
+SETTLEMENT_PATTERNS = [
+    (re.compile(r"parties\s+have\s+reached\s+a\s+settlement", re.IGNORECASE), 3),
+    (re.compile(r"stipulat(?:ed|ion)\s+(?:of\s+)?(?:voluntary\s+)?dismissal", re.IGNORECASE), 3),
+    (re.compile(r"voluntary\s+dismissal", re.IGNORECASE), 2),
+    (re.compile(r"dismissed\s+pursuant\s+to\s+(?:the\s+)?(?:parties'?\s+)?stipulation", re.IGNORECASE), 3),
+    (re.compile(r"settled\s+(?:out\s+of\s+court|between\s+the\s+parties)", re.IGNORECASE), 3),
 ]
 
 
@@ -49,6 +67,15 @@ def label_outcome(text_content: str) -> dict:
     for pattern, weight in MIXED_PATTERNS:
         if pattern.search(text_content):
             return {"label": "mixed", "confidence": min(0.5 + weight * 0.1, 1.0)}
+
+    # Check settlement patterns
+    settlement_score = 0
+    for pattern, weight in SETTLEMENT_PATTERNS:
+        if pattern.search(text_content):
+            settlement_score += weight
+
+    if settlement_score >= 2:
+        return {"label": "settled", "confidence": min(0.5 + settlement_score * 0.1, 0.95)}
 
     # Score plaintiff and defendant signals
     p_score = 0
@@ -179,6 +206,7 @@ def run_labeling(engine=None, relabel=False):
             "plaintiff_win": outcome_counts.get("plaintiff_win", 0),
             "defendant_win": outcome_counts.get("defendant_win", 0),
             "mixed": outcome_counts.get("mixed", 0),
+            "settled": outcome_counts.get("settled", 0),
             "unlabeled": outcome_counts.get("unlabeled", 0),
         },
         "claim_type": {
