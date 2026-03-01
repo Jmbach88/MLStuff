@@ -108,3 +108,117 @@ def label_claim_types(text_content: str) -> list:
             section = match.group(1).lower()
             found.add(section)
     return sorted(found)
+
+
+# ---------------------------------------------------------------------------
+# Batch labeling pipeline
+# ---------------------------------------------------------------------------
+
+def run_labeling(engine=None, relabel=False):
+    """Label all opinions in the database."""
+    if engine is None:
+        engine = get_local_engine()
+        init_local_db(engine)
+
+    session = get_session(engine)
+
+    if relabel:
+        session.execute(text("DELETE FROM labels"))
+        session.commit()
+
+    # Get opinions to label (skip already labeled unless relabeling)
+    if relabel:
+        opinions = session.execute(text(
+            "SELECT id, plain_text FROM opinions WHERE plain_text IS NOT NULL AND plain_text != ''"
+        )).fetchall()
+    else:
+        opinions = session.execute(text(
+            "SELECT o.id, o.plain_text FROM opinions o "
+            "WHERE o.plain_text IS NOT NULL AND o.plain_text != '' "
+            "AND o.id NOT IN (SELECT DISTINCT opinion_id FROM labels WHERE label_type = 'outcome')"
+        )).fetchall()
+
+    logger.info(f"Opinions to label: {len(opinions)}")
+
+    outcome_counts = Counter()
+    claim_type_counts = Counter()
+    batch_labels = []
+
+    for opinion_id, plain_text in opinions:
+        outcome = label_outcome(plain_text)
+        if outcome["label"] != "unlabeled":
+            batch_labels.append(Label(
+                opinion_id=opinion_id, label_type="outcome",
+                label_value=outcome["label"], source="regex",
+                confidence=outcome["confidence"],
+            ))
+        outcome_counts[outcome["label"]] += 1
+
+        sections = label_claim_types(plain_text)
+        for section in sections:
+            batch_labels.append(Label(
+                opinion_id=opinion_id, label_type="claim_type",
+                label_value=section, source="regex", confidence=0.95,
+            ))
+            claim_type_counts[section] += 1
+
+        if len(batch_labels) >= 5000:
+            session.add_all(batch_labels)
+            session.commit()
+            batch_labels = []
+
+    if batch_labels:
+        session.add_all(batch_labels)
+        session.commit()
+
+    session.close()
+
+    stats = {
+        "outcome": {
+            "total": len(opinions),
+            "plaintiff_win": outcome_counts.get("plaintiff_win", 0),
+            "defendant_win": outcome_counts.get("defendant_win", 0),
+            "mixed": outcome_counts.get("mixed", 0),
+            "unlabeled": outcome_counts.get("unlabeled", 0),
+        },
+        "claim_type": {
+            "total_labels": sum(claim_type_counts.values()),
+            "unique_sections": len(claim_type_counts),
+            "top_sections": claim_type_counts.most_common(10),
+        },
+    }
+    logger.info(f"Labeling complete: {stats}")
+    return stats
+
+
+if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
+    parser = argparse.ArgumentParser(description="Label opinions")
+    parser.add_argument("--relabel", action="store_true", help="Re-label all opinions")
+    parser.add_argument("--stats", action="store_true", help="Show label distribution")
+    args = parser.parse_args()
+
+    if args.stats:
+        engine = get_local_engine()
+        session = get_session(engine)
+        outcome = session.execute(text(
+            "SELECT label_value, COUNT(*) FROM labels WHERE label_type='outcome' GROUP BY label_value"
+        )).fetchall()
+        claim = session.execute(text(
+            "SELECT label_value, COUNT(*) FROM labels WHERE label_type='claim_type' GROUP BY label_value ORDER BY COUNT(*) DESC LIMIT 20"
+        )).fetchall()
+        session.close()
+        print("\nOutcome distribution:")
+        for val, count in outcome:
+            print(f"  {val}: {count}")
+        print("\nTop claim type sections:")
+        for val, count in claim:
+            print(f"  \u00a7{val}: {count}")
+    else:
+        stats = run_labeling(relabel=args.relabel)
+        print(f"\nOutcome: {stats['outcome']}")
+        print(f"Claim types: {stats['claim_type']['total_labels']} labels across {stats['claim_type']['unique_sections']} sections")

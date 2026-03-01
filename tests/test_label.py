@@ -4,6 +4,8 @@ import pytest
 os.environ["ML_LOCAL_DB"] = ":memory:"
 
 from label import label_outcome, label_claim_types
+from db import get_local_engine, init_local_db, get_session, Label, Opinion
+from sqlalchemy import text
 
 
 class TestOutcomeLabeling:
@@ -86,3 +88,56 @@ class TestClaimTypeLabeling:
         text = "\u00a71692e was violated. The \u00a71692e violation is clear. Under section 1692e the defendant..."
         result = label_claim_types(text)
         assert result.count("1692e") == 1
+
+
+class TestBatchLabeling:
+    def _setup_opinions(self):
+        engine = get_local_engine()
+        init_local_db(engine)
+        session = get_session(engine)
+
+        session.execute(text("DELETE FROM labels"))
+        session.execute(text("DELETE FROM opinions"))
+        session.commit()
+
+        opinions = [
+            Opinion(id=1, package_id="p1", title="Smith v. Collector",
+                    plain_text="Judgment for plaintiff. Damages awarded of $1000 under \u00a71692e."),
+            Opinion(id=2, package_id="p2", title="Jones v. Agency",
+                    plain_text="Plaintiff's complaint is dismissed. Judgment for defendant."),
+            Opinion(id=3, package_id="p3", title="Brown v. Corp",
+                    plain_text="This is a scheduling order for the pretrial conference."),
+        ]
+        session.add_all(opinions)
+        session.commit()
+        return engine
+
+    def test_run_labeling_creates_labels(self):
+        from label import run_labeling
+        engine = self._setup_opinions()
+        stats = run_labeling(engine)
+        session = get_session(engine)
+
+        outcome_labels = session.query(Label).filter_by(label_type="outcome").all()
+        labeled = [l for l in outcome_labels if l.label_value != "unlabeled"]
+        assert len(labeled) >= 2
+        session.close()
+
+    def test_run_labeling_creates_claim_labels(self):
+        from label import run_labeling
+        engine = self._setup_opinions()
+        stats = run_labeling(engine)
+        session = get_session(engine)
+
+        claim_labels = session.query(Label).filter_by(label_type="claim_type").all()
+        values = [l.label_value for l in claim_labels]
+        assert "1692e" in values
+        session.close()
+
+    def test_run_labeling_returns_stats(self):
+        from label import run_labeling
+        engine = self._setup_opinions()
+        stats = run_labeling(engine)
+        assert "outcome" in stats
+        assert "claim_type" in stats
+        assert stats["outcome"]["total"] == 3
