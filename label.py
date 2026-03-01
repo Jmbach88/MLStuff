@@ -218,6 +218,81 @@ def label_with_llm(text_content: str) -> dict:
 # Batch labeling pipeline
 # ---------------------------------------------------------------------------
 
+def run_llm_labeling(engine=None, limit=None):
+    """Label unlabeled opinions using Ollama LLM.
+
+    Only processes opinions that have no outcome label at all.
+    Saves after each opinion for crash safety.
+
+    Args:
+        engine: SQLAlchemy engine
+        limit: Max opinions to process (None = all)
+
+    Returns:
+        dict with stats
+    """
+    if engine is None:
+        engine = get_local_engine()
+        init_local_db(engine)
+
+    session = get_session(engine)
+
+    query = (
+        "SELECT o.id, o.plain_text FROM opinions o "
+        "WHERE o.plain_text IS NOT NULL AND o.plain_text != '' "
+        "AND o.id NOT IN (SELECT DISTINCT opinion_id FROM labels WHERE label_type = 'outcome')"
+    )
+    if limit:
+        query += f" LIMIT {int(limit)}"
+
+    opinions = session.execute(text(query)).fetchall()
+    logger.info(f"LLM labeling: {len(opinions)} unlabeled opinions to process")
+
+    if not opinions:
+        session.close()
+        return {"total": 0}
+
+    counts = Counter()
+    errors = 0
+
+    for i, (opinion_id, plain_text) in enumerate(opinions):
+        result = label_with_llm(plain_text)
+
+        if result["label"] == "error":
+            errors += 1
+            if errors >= 5:
+                logger.error("Too many consecutive errors. Is Ollama running? Stopping.")
+                break
+            continue
+
+        errors = 0  # reset consecutive error count on success
+        counts[result["label"]] += 1
+
+        if result["label"] != "unclear" and result["confidence"] >= 0.5:
+            session.add(Label(
+                opinion_id=opinion_id,
+                label_type="outcome",
+                label_value=result["label"],
+                source="llm",
+                confidence=result["confidence"],
+            ))
+            session.commit()
+
+        if (i + 1) % 100 == 0:
+            logger.info(f"  LLM progress: {i + 1}/{len(opinions)} — {dict(counts)}")
+
+    session.close()
+
+    stats = {
+        "total": len(opinions),
+        "processed": sum(counts.values()),
+        "labeled": sum(v for k, v in counts.items() if k not in ("unclear", "error")),
+        "distribution": dict(counts),
+    }
+    logger.info(f"LLM labeling complete: {stats}")
+    return stats
+
+
 def run_labeling(engine=None, relabel=False):
     """Label all opinions in the database."""
     if engine is None:
@@ -305,6 +380,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Label opinions")
     parser.add_argument("--relabel", action="store_true", help="Re-label all opinions")
     parser.add_argument("--stats", action="store_true", help="Show label distribution")
+    parser.add_argument("--llm", action="store_true", help="Use Ollama LLM for unlabeled opinions")
+    parser.add_argument("--llm-limit", type=int, default=None, help="Max opinions to LLM-label")
     args = parser.parse_args()
 
     if args.stats:
@@ -323,6 +400,9 @@ if __name__ == "__main__":
         print("\nTop claim type sections:")
         for val, count in claim:
             print(f"  \u00a7{val}: {count}")
+    elif args.llm:
+        stats = run_llm_labeling(limit=args.llm_limit)
+        print(f"\nLLM labeling: {stats}")
     else:
         stats = run_labeling(relabel=args.relabel)
         print(f"\nOutcome: {stats['outcome']}")
