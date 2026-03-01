@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Column, Integer, Text, ForeignKey, UniqueConstraint,
+    Column, Integer, Float, Text, ForeignKey, UniqueConstraint,
     create_engine, inspect
 )
 from sqlalchemy.orm import declarative_base, relationship, Session
@@ -56,6 +56,38 @@ class FDCPASection(Base):
     __table_args__ = (
         UniqueConstraint("opinion_id", "subsection", name="uq_opinion_subsection"),
     )
+
+
+class Label(Base):
+    __tablename__ = "labels"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    opinion_id = Column(Integer, ForeignKey("opinions.id"), nullable=False)
+    label_type = Column(Text, nullable=False)
+    label_value = Column(Text, nullable=False)
+    source = Column(Text, nullable=False)
+    confidence = Column(Float)
+
+
+class Prediction(Base):
+    __tablename__ = "predictions"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    opinion_id = Column(Integer, ForeignKey("opinions.id"), nullable=False)
+    model_name = Column(Text, nullable=False)
+    label_type = Column(Text, nullable=False)
+    predicted_value = Column(Text, nullable=False)
+    confidence = Column(Float)
+    created_at = Column(Text)
+
+
+class Model(Base):
+    __tablename__ = "models"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(Text, unique=True, nullable=False)
+    label_type = Column(Text, nullable=False)
+    accuracy = Column(Float)
+    f1_score = Column(Float)
+    trained_at = Column(Text)
+    params_json = Column(Text)
 
 
 def get_local_engine():
