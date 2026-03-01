@@ -1,5 +1,7 @@
 import os
 import pytest
+from unittest.mock import patch, MagicMock
+import json
 
 os.environ["ML_LOCAL_DB"] = ":memory:"
 
@@ -198,3 +200,59 @@ class TestBatchLabeling:
         assert "outcome" in stats
         assert "claim_type" in stats
         assert stats["outcome"]["total"] == 3
+
+
+class TestLLMLabeling:
+    def test_parse_llm_response_valid(self):
+        from label import _parse_llm_response
+        response = '{"outcome": "plaintiff_win", "confidence": 0.85}'
+        result = _parse_llm_response(response)
+        assert result["label"] == "plaintiff_win"
+        assert result["confidence"] == 0.85
+
+    def test_parse_llm_response_with_text_around_json(self):
+        from label import _parse_llm_response
+        response = 'Based on my analysis:\n{"outcome": "defendant_win", "confidence": 0.9}\nThat is my conclusion.'
+        result = _parse_llm_response(response)
+        assert result["label"] == "defendant_win"
+
+    def test_parse_llm_response_invalid(self):
+        from label import _parse_llm_response
+        response = "I cannot determine the outcome of this case."
+        result = _parse_llm_response(response)
+        assert result["label"] == "unclear"
+        assert result["confidence"] == 0.0
+
+    def test_parse_llm_response_unclear(self):
+        from label import _parse_llm_response
+        response = '{"outcome": "unclear", "confidence": 0.3}'
+        result = _parse_llm_response(response)
+        assert result["label"] == "unclear"
+
+    def test_parse_llm_response_settled(self):
+        from label import _parse_llm_response
+        response = '{"outcome": "settled", "confidence": 0.8}'
+        result = _parse_llm_response(response)
+        assert result["label"] == "settled"
+
+    @patch("label.requests.post")
+    def test_label_with_llm_success(self, mock_post):
+        from label import label_with_llm
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "response": '{"outcome": "plaintiff_win", "confidence": 0.9}'
+        }
+        mock_post.return_value = mock_response
+        result = label_with_llm("The court grants judgment for plaintiff.")
+        assert result["label"] == "plaintiff_win"
+        assert result["confidence"] == 0.9
+
+    @patch("label.requests.post")
+    def test_label_with_llm_connection_error(self, mock_post):
+        from label import label_with_llm
+        import requests as req
+        mock_post.side_effect = req.ConnectionError("Ollama not running")
+        result = label_with_llm("Some opinion text")
+        assert result["label"] == "error"
+        assert result["confidence"] == 0.0

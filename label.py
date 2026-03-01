@@ -1,7 +1,10 @@
 import argparse
 import logging
 import re
+import json as _json
 from collections import Counter
+import requests
+import config
 from sqlalchemy import text
 from db import get_local_engine, init_local_db, get_session, Label
 
@@ -135,6 +138,80 @@ def label_claim_types(text_content: str) -> list:
             section = match.group(1).lower()
             found.add(section)
     return sorted(found)
+
+
+# ---------------------------------------------------------------------------
+# LLM-assisted labeling (Ollama)
+# ---------------------------------------------------------------------------
+
+LLM_PROMPT_TEMPLATE = """You are a legal analyst. Read this federal court opinion and classify its outcome.
+
+Respond with ONLY a JSON object, no other text:
+{{"outcome": "<LABEL>", "confidence": <0.0-1.0>}}
+
+Where LABEL is one of:
+- "plaintiff_win" - plaintiff prevailed (judgment for plaintiff, damages awarded, defendant liable)
+- "defendant_win" - defendant prevailed (case dismissed, summary judgment for defendant)
+- "mixed" - split decision (granted in part, denied in part)
+- "settled" - case settled or voluntarily dismissed
+- "unclear" - cannot determine from the text
+
+OPINION TEXT:
+{text}"""
+
+
+def _parse_llm_response(response_text: str) -> dict:
+    """Parse LLM response, extracting JSON from potentially noisy output."""
+    try:
+        data = _json.loads(response_text.strip())
+    except _json.JSONDecodeError:
+        import re as _re
+        match = _re.search(r'\{[^}]+\}', response_text)
+        if match:
+            try:
+                data = _json.loads(match.group())
+            except _json.JSONDecodeError:
+                return {"label": "unclear", "confidence": 0.0}
+        else:
+            return {"label": "unclear", "confidence": 0.0}
+
+    outcome = data.get("outcome", "unclear").lower().strip()
+    confidence = float(data.get("confidence", 0.5))
+
+    valid_labels = {"plaintiff_win", "defendant_win", "mixed", "settled", "unclear"}
+    if outcome not in valid_labels:
+        return {"label": "unclear", "confidence": 0.0}
+
+    return {"label": outcome, "confidence": confidence}
+
+
+def label_with_llm(text_content: str) -> dict:
+    """Label an opinion using Ollama LLM.
+
+    Returns {"label": str, "confidence": float}
+    On error: {"label": "error", "confidence": 0.0}
+    """
+    truncated = text_content[:config.LLM_TEXT_LIMIT]
+    prompt = LLM_PROMPT_TEMPLATE.format(text=truncated)
+
+    try:
+        response = requests.post(
+            config.OLLAMA_URL,
+            json={"model": config.OLLAMA_MODEL, "prompt": prompt, "stream": False},
+            timeout=120,
+        )
+        response.raise_for_status()
+        result_text = response.json().get("response", "")
+        return _parse_llm_response(result_text)
+    except requests.ConnectionError:
+        logger.error("Cannot connect to Ollama. Is it running?")
+        return {"label": "error", "confidence": 0.0}
+    except requests.Timeout:
+        logger.warning("Ollama request timed out")
+        return {"label": "error", "confidence": 0.0}
+    except Exception as e:
+        logger.error(f"LLM labeling error: {e}")
+        return {"label": "error", "confidence": 0.0}
 
 
 # ---------------------------------------------------------------------------
