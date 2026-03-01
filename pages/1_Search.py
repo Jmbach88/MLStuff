@@ -88,6 +88,21 @@ with st.sidebar:
     if subsections and ("FDCPA" in selected_statutes or not selected_statutes):
         selected_subsections = st.multiselect("FDCPA Subsections", subsections)
 
+    # Predicted outcome filter
+    outcome_options = ["All", "Plaintiff Win", "Defendant Win", "Mixed"]
+    selected_outcome = st.selectbox("Predicted Outcome", outcome_options)
+
+    # Claim section filter — extract available sections from chunk_map
+    all_sections = set()
+    for entry in (chunk_map or []):
+        cs = entry.get("claim_sections", "")
+        if cs:
+            for s in cs.split(","):
+                if s.strip():
+                    all_sections.add(s.strip())
+    all_sections = sorted(all_sections)
+    selected_claim_sections = st.multiselect("Claim Sections", [f"§{s}" for s in all_sections])
+
     results_per_page = st.slider("Results per page", 5, 50, 10)
 
 # --- Search Box ---
@@ -127,6 +142,16 @@ elif query:
             st.warning("No opinions match the selected subsections.")
             st.stop()
 
+    # Predicted outcome filter
+    if selected_outcome != "All":
+        outcome_value = selected_outcome.lower().replace(" ", "_")
+        filters["predicted_outcome"] = outcome_value
+
+    # Claim section filter
+    if selected_claim_sections and len(selected_claim_sections) == 1:
+        section = selected_claim_sections[0].replace("§", "")
+        filters["claim_section"] = section
+
     # Handle multi-select filters client-side
     multi_statute_filter = selected_statutes if len(selected_statutes) > 1 else None
     multi_circuit_filter = selected_circuits if len(selected_circuits) > 1 else None
@@ -143,6 +168,12 @@ elif query:
         results = [r for r in results if any(s in r["statutes"] for s in multi_statute_filter)]
     if multi_circuit_filter:
         results = [r for r in results if r["circuit"] in multi_circuit_filter]
+
+    if selected_claim_sections and len(selected_claim_sections) > 1:
+        filter_sections = [s.replace("§", "") for s in selected_claim_sections]
+        results = [r for r in results if any(
+            s in r.get("claim_sections", "") for s in filter_sections
+        )]
 
     results = results[:results_per_page]
 
@@ -169,6 +200,20 @@ elif query:
             if r["statutes"]:
                 statute_list = r["statutes"].split(",")
                 st.markdown(" ".join(f"`{s}`" for s in statute_list))
+
+            # Prediction badges
+            badges = []
+            pred_outcome = r.get("predicted_outcome", "")
+            if pred_outcome:
+                outcome_display = pred_outcome.replace("_", " ").title()
+                badges.append(f"`{outcome_display}`")
+            claim_secs = r.get("claim_sections", "")
+            if claim_secs:
+                for s in claim_secs.split(","):
+                    if s.strip():
+                        badges.append(f"`§{s.strip()}`")
+            if badges:
+                st.markdown("Predictions: " + " ".join(badges))
 
             st.progress(min(score_pct / 100, 1.0), text=f"Relevance: {score_pct:.1f}%")
 
