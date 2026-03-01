@@ -19,3 +19,9 @@ CHUNK_OVERLAP = 400     # characters (~100 tokens)
 # Search
 DEFAULT_TOP_K = 10
 OVERSAMPLE_FACTOR = 5   # fetch 5x results for grouping
+
+# LLM Labeling (Ollama)
+OLLAMA_URL = "http://localhost:11434/api/generate"
+OLLAMA_MODEL = "mistral:7b-instruct-v0.3-q4_K_M"
+LLM_TEXT_LIMIT = 3000  # chars to send to LLM
+USE_LLM_LABELING = False  # toggle when Ollama is available
