@@ -37,7 +37,7 @@ def _ensure_models_dir():
     os.makedirs(MODELS_DIR, exist_ok=True)
 
 
-def train_outcome_model(engine=None):
+def train_outcome_model(engine=None, version=1):
     """Train a logistic regression model for outcome classification.
 
     Loads labeled opinions with outcome labels, does 80/20 stratified split,
@@ -54,7 +54,9 @@ def train_outcome_model(engine=None):
     rows = session.execute(text(
         "SELECT o.id, o.plain_text, l.label_value "
         "FROM opinions o JOIN labels l ON o.id = l.opinion_id "
-        "WHERE l.label_type = 'outcome' AND o.plain_text IS NOT NULL AND o.plain_text != ''"
+        "WHERE l.label_type = 'outcome' "
+        "AND l.label_value IN ('plaintiff_win', 'defendant_win', 'mixed') "
+        "AND o.plain_text IS NOT NULL AND o.plain_text != ''"
     )).fetchall()
     session.close()
 
@@ -81,9 +83,9 @@ def train_outcome_model(engine=None):
     f1 = f1_score(y_test, y_pred, average="macro")
     report = classification_report(y_test, y_pred, output_dict=True)
 
-    model_name = "outcome_logreg_v1"
+    model_name = f"outcome_logreg_v{version}"
     _ensure_models_dir()
-    model_path = os.path.join(MODELS_DIR, "outcome_model.pkl")
+    model_path = os.path.join(MODELS_DIR, f"outcome_model_v{version}.pkl")
     joblib.dump({"tfidf": tfidf, "clf": clf}, model_path)
     logger.info(f"Saved outcome model to {model_path}")
 
@@ -119,7 +121,7 @@ def train_outcome_model(engine=None):
     return result
 
 
-def predict_outcomes(engine=None):
+def predict_outcomes(engine=None, version=1):
     """Predict outcomes for opinions without existing predictions.
 
     Loads the trained model from disk, gets opinions without predictions,
@@ -131,7 +133,7 @@ def predict_outcomes(engine=None):
         engine = get_local_engine()
         init_local_db(engine)
 
-    model_path = os.path.join(MODELS_DIR, "outcome_model.pkl")
+    model_path = os.path.join(MODELS_DIR, f"outcome_model_v{version}.pkl")
     if not os.path.exists(model_path):
         logger.error("No trained outcome model found")
         return 0
@@ -139,7 +141,7 @@ def predict_outcomes(engine=None):
     model_data = joblib.load(model_path)
     tfidf = model_data["tfidf"]
     clf = model_data["clf"]
-    model_name = "outcome_logreg_v1"
+    model_name = f"outcome_logreg_v{version}"
 
     session = get_session(engine)
 
@@ -187,7 +189,7 @@ def predict_outcomes(engine=None):
     return count
 
 
-def train_claim_type_model(engine=None):
+def train_claim_type_model(engine=None, version=1):
     """Train a multi-label classifier for claim type sections.
 
     Gets sections with >= MIN_EXAMPLES examples, builds multi-label dataset
@@ -272,9 +274,9 @@ def train_claim_type_model(engine=None):
 
     avg_f1 = float(np.mean(section_f1s)) if section_f1s else 0.0
 
-    model_name = "claim_type_ovr_v1"
+    model_name = f"claim_type_ovr_v{version}"
     _ensure_models_dir()
-    model_path = os.path.join(MODELS_DIR, "claim_type_model.pkl")
+    model_path = os.path.join(MODELS_DIR, f"claim_type_model_v{version}.pkl")
     joblib.dump({"tfidf": tfidf, "clf": clf, "mlb": mlb, "sections": list(mlb.classes_)}, model_path)
     logger.info(f"Saved claim type model to {model_path}")
 
@@ -306,7 +308,7 @@ def train_claim_type_model(engine=None):
     return result
 
 
-def predict_claim_types(engine=None):
+def predict_claim_types(engine=None, version=1):
     """Predict claim types for opinions without existing predictions.
 
     Loads multi-label model, predicts using inverse_transform,
@@ -318,7 +320,7 @@ def predict_claim_types(engine=None):
         engine = get_local_engine()
         init_local_db(engine)
 
-    model_path = os.path.join(MODELS_DIR, "claim_type_model.pkl")
+    model_path = os.path.join(MODELS_DIR, f"claim_type_model_v{version}.pkl")
     if not os.path.exists(model_path):
         logger.error("No trained claim type model found")
         return 0
@@ -327,7 +329,7 @@ def predict_claim_types(engine=None):
     tfidf = model_data["tfidf"]
     clf = model_data["clf"]
     mlb = model_data["mlb"]
-    model_name = "claim_type_ovr_v1"
+    model_name = f"claim_type_ovr_v{version}"
 
     session = get_session(engine)
 
@@ -389,7 +391,7 @@ def predict_claim_types(engine=None):
     return count
 
 
-def update_chunk_map_with_predictions(engine=None):
+def update_chunk_map_with_predictions(engine=None, outcome_version=1, claim_version=1):
     """Add predicted_outcome and claim_sections to existing FAISS chunk_map."""
     if engine is None:
         engine = get_local_engine()
@@ -405,13 +407,13 @@ def update_chunk_map_with_predictions(engine=None):
 
     outcome_rows = session.execute(text(
         "SELECT opinion_id, predicted_value FROM predictions "
-        "WHERE model_name = 'outcome_logreg_v1' AND label_type = 'outcome'"
+        f"WHERE model_name = 'outcome_logreg_v{outcome_version}' AND label_type = 'outcome'"
     )).fetchall()
     outcome_map = {r[0]: r[1] for r in outcome_rows}
 
     claim_rows = session.execute(text(
         "SELECT opinion_id, predicted_value FROM predictions "
-        "WHERE model_name = 'claim_type_logreg_v1' AND label_type = 'claim_type'"
+        f"WHERE model_name = 'claim_type_ovr_v{claim_version}' AND label_type = 'claim_type'"
     )).fetchall()
     claim_map = {}
     for oid, section in claim_rows:
@@ -432,36 +434,73 @@ def update_chunk_map_with_predictions(engine=None):
     return updated
 
 
+def compare_models(engine=None, label_type="outcome"):
+    """Compare model versions by metrics stored in DB."""
+    if engine is None:
+        engine = get_local_engine()
+
+    session = get_session(engine)
+    rows = session.execute(text(
+        "SELECT name, accuracy, f1_score, trained_at FROM models "
+        "WHERE label_type = :lt ORDER BY name"
+    ), {"lt": label_type}).fetchall()
+    session.close()
+
+    comparison = {}
+    for name, acc, f1, trained in rows:
+        version = name.split("_v")[-1] if "_v" in name else name
+        comparison[f"v{version}"] = {
+            "model_name": name,
+            "accuracy": acc,
+            "f1_score": f1,
+            "trained_at": trained,
+        }
+
+    return comparison
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     parser = argparse.ArgumentParser(description="Train and predict with classifiers")
     parser.add_argument("--train-only", action="store_true")
     parser.add_argument("--predict-only", action="store_true")
     parser.add_argument("--update-index", action="store_true", help="Update FAISS chunk_map with predictions")
+    parser.add_argument("--version", type=int, default=1, help="Model version")
+    parser.add_argument("--compare", action="store_true", help="Compare model versions")
     args = parser.parse_args()
 
     engine = get_local_engine()
     init_local_db(engine)
 
-    if not args.predict_only:
-        print("\n=== Training Outcome Model ===")
-        outcome_result = train_outcome_model(engine)
-        print(f"Accuracy: {outcome_result.get('accuracy', 'N/A')}")
-        print(f"Macro F1: {outcome_result.get('f1_score', 'N/A')}")
-        print("\n=== Training Claim Type Model ===")
-        claim_result = train_claim_type_model(engine)
-        print(f"Sections trained: {claim_result.get('sections_trained', 0)}")
-        print(f"Avg F1: {claim_result.get('avg_f1', 'N/A')}")
+    if args.compare:
+        print("\n=== Outcome Models ===")
+        comp = compare_models(engine, "outcome")
+        for v, metrics in sorted(comp.items()):
+            print(f"  {v}: accuracy={metrics['accuracy']}, f1={metrics['f1_score']}, trained={metrics['trained_at']}")
+        print("\n=== Claim Type Models ===")
+        comp = compare_models(engine, "claim_type")
+        for v, metrics in sorted(comp.items()):
+            print(f"  {v}: f1={metrics['f1_score']}, trained={metrics['trained_at']}")
+    else:
+        if not args.predict_only:
+            print("\n=== Training Outcome Model ===")
+            outcome_result = train_outcome_model(engine, version=args.version)
+            print(f"Accuracy: {outcome_result.get('accuracy', 'N/A')}")
+            print(f"Macro F1: {outcome_result.get('f1_score', 'N/A')}")
+            print("\n=== Training Claim Type Model ===")
+            claim_result = train_claim_type_model(engine, version=args.version)
+            print(f"Sections trained: {claim_result.get('sections_trained', 0)}")
+            print(f"Avg F1: {claim_result.get('avg_f1', 'N/A')}")
 
-    if not args.train_only:
-        print("\n=== Predicting Outcomes ===")
-        n = predict_outcomes(engine)
-        print(f"Predicted {n} opinions")
-        print("\n=== Predicting Claim Types ===")
-        n = predict_claim_types(engine)
-        print(f"Predicted {n} opinions")
+        if not args.train_only:
+            print("\n=== Predicting Outcomes ===")
+            n = predict_outcomes(engine, version=args.version)
+            print(f"Predicted {n} opinions")
+            print("\n=== Predicting Claim Types ===")
+            n = predict_claim_types(engine, version=args.version)
+            print(f"Predicted {n} opinions")
 
-    if args.update_index:
-        print("\n=== Updating FAISS Index Metadata ===")
-        n = update_chunk_map_with_predictions(engine)
-        print(f"Updated {n} chunk_map entries")
+        if args.update_index:
+            print("\n=== Updating FAISS Index Metadata ===")
+            n = update_chunk_map_with_predictions(engine)
+            print(f"Updated {n} chunk_map entries")

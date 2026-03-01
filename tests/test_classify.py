@@ -92,3 +92,22 @@ class TestClaimTypeClassifier:
         train_claim_type_model(engine)
         count = predict_claim_types(engine)
         assert count > 0
+
+
+class TestModelVersioning:
+    def test_train_outcome_model_v2(self):
+        from classify import train_outcome_model
+        engine = _setup_labeled_data()
+        result = train_outcome_model(engine, version=2)
+        assert result["model_name"] == "outcome_logreg_v2"
+
+    def test_compare_models(self):
+        from classify import train_outcome_model, compare_models
+        engine = _setup_labeled_data()
+        train_outcome_model(engine, version=1)
+        train_outcome_model(engine, version=2)
+        comparison = compare_models(engine, "outcome")
+        assert "v1" in comparison
+        assert "v2" in comparison
+        assert "accuracy" in comparison["v1"]
+        assert "accuracy" in comparison["v2"]
