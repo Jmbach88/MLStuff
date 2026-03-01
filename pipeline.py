@@ -20,13 +20,15 @@ from sync import sync_from_source
 from chunk import chunk_opinion
 from embed import embed_chunks, save_checkpoint
 from index import build_index, add_to_index, save_index, load_index
+from label import run_labeling
+from classify import train_outcome_model, train_claim_type_model, predict_outcomes, predict_claim_types, update_chunk_map_with_predictions
 
 logger = logging.getLogger(__name__)
 
 CHECKPOINT_BATCH = 500  # opinions per checkpoint
 
 
-def run_pipeline(sync_only=False, reindex=False):
+def run_pipeline(sync_only=False, reindex=False, classify=False, predict_new=False):
     # Ensure data dirs exist
     os.makedirs(os.path.dirname(config.FAISS_INDEX), exist_ok=True)
     os.makedirs(config.CHECKPOINT_DIR, exist_ok=True)
@@ -160,6 +162,35 @@ def run_pipeline(sync_only=False, reindex=False):
     logger.info(f"Pipeline complete. {processed} opinions -> {total_chunks} chunks indexed.")
     logger.info(f"FAISS index total vectors: {index.ntotal}")
 
+    # Step 4: Classification (if requested)
+    if classify:
+        logger.info("Running labeling pipeline...")
+        stats = run_labeling(engine)
+        logger.info(f"Labeling stats: {stats}")
+
+        logger.info("Training outcome model...")
+        outcome_result = train_outcome_model(engine)
+        logger.info(f"Outcome model: {outcome_result.get('accuracy', 'N/A')} accuracy")
+
+        logger.info("Training claim type model...")
+        claim_result = train_claim_type_model(engine)
+        logger.info(f"Claim type model: {claim_result.get('sections_trained', 0)} sections")
+
+        logger.info("Predicting all opinions...")
+        predict_outcomes(engine)
+        predict_claim_types(engine)
+
+        logger.info("Updating FAISS index metadata...")
+        update_chunk_map_with_predictions(engine)
+
+    if predict_new:
+        logger.info("Predicting new opinions with existing models...")
+        n1 = predict_outcomes(engine)
+        n2 = predict_claim_types(engine)
+        if n1 > 0 or n2 > 0:
+            update_chunk_map_with_predictions(engine)
+        logger.info(f"Predicted {n1} outcomes, {n2} claim types")
+
 
 if __name__ == "__main__":
     logging.basicConfig(
@@ -174,6 +205,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the full processing pipeline")
     parser.add_argument("--sync-only", action="store_true", help="Only sync, don't embed")
     parser.add_argument("--reindex", action="store_true", help="Re-process all opinions")
+    parser.add_argument("--classify", action="store_true", help="Run labeling + training + prediction")
+    parser.add_argument("--predict-only", action="store_true", help="Predict new opinions with existing models")
     args = parser.parse_args()
 
-    run_pipeline(sync_only=args.sync_only, reindex=args.reindex)
+    run_pipeline(
+        sync_only=args.sync_only,
+        reindex=args.reindex,
+        classify=args.classify,
+        predict_new=args.predict_only,
+    )
