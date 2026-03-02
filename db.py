@@ -90,6 +90,33 @@ class Model(Base):
     params_json = Column(Text)
 
 
+class Citation(Base):
+    __tablename__ = "citations"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    citing_opinion_id = Column(Integer, ForeignKey("opinions.id"), nullable=False)
+    cited_opinion_id = Column(Integer, ForeignKey("opinions.id"), nullable=True)
+    volume = Column(Text)
+    reporter = Column(Text)
+    page = Column(Text)
+    citation_string = Column(Text, nullable=False)
+    context_snippet = Column(Text)
+    __table_args__ = (
+        UniqueConstraint("citing_opinion_id", "volume", "reporter", "page",
+                         name="uq_citation_dedup"),
+    )
+
+
+class OpinionMetric(Base):
+    __tablename__ = "opinion_metrics"
+    opinion_id = Column(Integer, ForeignKey("opinions.id"), primary_key=True)
+    in_degree = Column(Integer, default=0)
+    out_degree = Column(Integer, default=0)
+    pagerank = Column(Float)
+    hub_score = Column(Float)
+    authority_score = Column(Float)
+    community_id = Column(Integer)
+
+
 def get_local_engine():
     db_path = os.environ.get("ML_LOCAL_DB", config.LOCAL_DB)
     if db_path == ":memory:":
