@@ -27,6 +27,26 @@ MODEL_NAME = "bertopic_v1"
 DEFAULT_MODEL_PATH = os.path.join(MODELS_DIR, "bertopic_v1.pkl")
 DEFAULT_COORDS_PATH = os.path.join(MODELS_DIR, "topic_coords_v1.npz")
 
+# Legal domain stop words — common terms that appear in all opinions
+# and don't help distinguish topics from each other
+LEGAL_STOP_WORDS = [
+    "court", "plaintiff", "defendant", "motion", "order", "case",
+    "complaint", "filed", "claim", "claims", "action", "party", "parties",
+    "relief", "judgment", "granted", "denied", "pursuant", "alleged",
+    "alleges", "argues", "argue", "argument", "asserting", "asserts",
+    "contends", "states", "stated", "facts", "fact", "evidence",
+    "standard", "review", "record", "matter", "issue", "issues",
+    "whether", "however", "therefore", "moreover", "thus", "also",
+    "would", "must", "shall", "may", "could", "upon", "thereof",
+    "herein", "therein", "supra", "infra",
+    "judge", "district", "circuit", "appeals", "appellate",
+    "federal", "united", "states", "section", "subsection",
+    "statute", "statutory", "act", "rule", "rules", "regulation",
+    "amended", "amend", "amendment",
+    "counsel", "attorney", "attorneys", "law", "legal",
+    "cause", "causes", "hearing", "trial", "proceeding", "proceedings",
+]
+
 
 def aggregate_opinion_embeddings(chunk_map, vectors):
     """Groups chunk vectors by opinion_id, averages them, L2-normalizes.
@@ -72,7 +92,8 @@ def aggregate_opinion_embeddings(chunk_map, vectors):
 
 
 def fit_topics(opinion_ids, embeddings, docs, model_path=None,
-               umap_model=None, hdbscan_model=None, nr_topics=None):
+               umap_model=None, hdbscan_model=None, nr_topics=None,
+               vectorizer_model=None, reduce_outliers=True):
     """Fits BERTopic with UMAP and HDBSCAN on opinion embeddings.
 
     Args:
@@ -83,6 +104,8 @@ def fit_topics(opinion_ids, embeddings, docs, model_path=None,
         umap_model: optional pre-configured UMAP model
         hdbscan_model: optional pre-configured HDBSCAN model
         nr_topics: optional target number of topics (merges similar topics)
+        vectorizer_model: optional CountVectorizer for c-TF-IDF
+        reduce_outliers: whether to reassign outliers to nearest topic (default True)
 
     Returns:
         (topics, probs, topic_info)
@@ -90,6 +113,7 @@ def fit_topics(opinion_ids, embeddings, docs, model_path=None,
     from umap import UMAP
     from fast_hdbscan import HDBSCAN
     from bertopic import BERTopic
+    from sklearn.feature_extraction.text import CountVectorizer
 
     if model_path is None:
         model_path = DEFAULT_MODEL_PATH
@@ -111,14 +135,32 @@ def fit_topics(opinion_ids, embeddings, docs, model_path=None,
             prediction_data=False,
         )
 
+    if vectorizer_model is None:
+        vectorizer_model = CountVectorizer(
+            ngram_range=(1, 2),
+            stop_words=LEGAL_STOP_WORDS,
+            min_df=5,
+            max_df=0.95,
+        )
+
     topic_model = BERTopic(
         umap_model=umap_model,
         hdbscan_model=hdbscan_model,
+        vectorizer_model=vectorizer_model,
         nr_topics=nr_topics,
         verbose=True,
     )
 
     topics, probs = topic_model.fit_transform(docs, embeddings=embeddings)
+
+    # Reduce outliers by reassigning to nearest topic
+    if reduce_outliers:
+        n_outliers_before = sum(1 for t in topics if t == -1)
+        if n_outliers_before > 0:
+            topics = topic_model.reduce_outliers(docs, topics, strategy="embeddings", embeddings=embeddings)
+            topic_model.update_topics(docs, topics=topics, vectorizer_model=vectorizer_model)
+            n_outliers_after = sum(1 for t in topics if t == -1)
+            logger.info(f"Outlier reduction: {n_outliers_before} -> {n_outliers_after}")
 
     os.makedirs(os.path.dirname(model_path), exist_ok=True)
     topic_model.save(model_path, serialization="pickle", save_ctfidf=True)
@@ -246,13 +288,13 @@ def run_topic_modeling(engine=None, refit=False, nr_topics=None):
     opinion_ids, embeddings, metadata = aggregate_opinion_embeddings(chunk_map, vectors)
     logger.info(f"Aggregated to {len(opinion_ids)} opinions")
 
-    # Get first chunk text per opinion for c-TF-IDF
-    first_texts = {}
+    # Get text per opinion for c-TF-IDF (concatenate first 3 chunks)
+    opinion_texts = defaultdict(list)
     for entry in chunk_map:
         oid = entry["opinion_id"]
-        if oid not in first_texts:
-            first_texts[oid] = entry.get("text", "")
-    docs = [first_texts.get(oid, "") for oid in opinion_ids]
+        if len(opinion_texts[oid]) < 3:
+            opinion_texts[oid].append(entry.get("text", ""))
+    docs = [" ".join(opinion_texts.get(oid, [""])) for oid in opinion_ids]
 
     # Fit topics
     if refit or not os.path.exists(DEFAULT_MODEL_PATH):

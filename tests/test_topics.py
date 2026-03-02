@@ -88,10 +88,14 @@ class TestTopicFitting:
         hdbscan_model = HDBSCAN(min_cluster_size=5, min_samples=3,
                                 metric="euclidean", prediction_data=False)
 
+        from sklearn.feature_extraction.text import CountVectorizer
+        vectorizer_model = CountVectorizer(ngram_range=(1, 1), min_df=1)
+
         topics, probs, topic_info = fit_topics(
             opinion_ids, embeddings, docs,
             model_path=os.path.join(os.path.dirname(__file__), "tmp_model.pkl"),
             umap_model=umap_model, hdbscan_model=hdbscan_model,
+            vectorizer_model=vectorizer_model, reduce_outliers=False,
         )
 
         assert len(topics) == 60
@@ -123,8 +127,12 @@ class TestTopicFitting:
         hdbscan_model = HDBSCAN(min_cluster_size=5, min_samples=3,
                                 metric="euclidean", prediction_data=False)
 
+        from sklearn.feature_extraction.text import CountVectorizer
+        vectorizer_model = CountVectorizer(ngram_range=(1, 1), min_df=1)
+
         fit_topics(opinion_ids, embeddings, docs, model_path=model_path,
-                   umap_model=umap_model, hdbscan_model=hdbscan_model)
+                   umap_model=umap_model, hdbscan_model=hdbscan_model,
+                   vectorizer_model=vectorizer_model, reduce_outliers=False)
 
         assert os.path.exists(model_path)
 
