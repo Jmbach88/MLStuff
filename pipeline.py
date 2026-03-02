@@ -23,13 +23,14 @@ from index import build_index, add_to_index, save_index, load_index
 from label import run_labeling
 from classify import train_outcome_model, train_claim_type_model, predict_outcomes, predict_claim_types, update_chunk_map_with_predictions
 from topics import run_topic_modeling
+from citations import run_citation_analysis
 
 logger = logging.getLogger(__name__)
 
 CHECKPOINT_BATCH = 500  # opinions per checkpoint
 
 
-def run_pipeline(sync_only=False, reindex=False, classify=False, predict_new=False, topics=False):
+def run_pipeline(sync_only=False, reindex=False, classify=False, predict_new=False, topics=False, citations=False):
     # Ensure data dirs exist
     os.makedirs(os.path.dirname(config.FAISS_INDEX), exist_ok=True)
     os.makedirs(config.CHECKPOINT_DIR, exist_ok=True)
@@ -196,6 +197,10 @@ def run_pipeline(sync_only=False, reindex=False, classify=False, predict_new=Fal
         logger.info("Running topic modeling...")
         run_topic_modeling(engine, refit=reindex)
 
+    if citations:
+        logger.info("Running citation analysis...")
+        run_citation_analysis(engine)
+
 
 if __name__ == "__main__":
     logging.basicConfig(
@@ -213,6 +218,8 @@ if __name__ == "__main__":
     parser.add_argument("--classify", action="store_true", help="Run labeling + training + prediction")
     parser.add_argument("--predict-only", action="store_true", help="Predict new opinions with existing models")
     parser.add_argument("--topics", action="store_true", help="Run topic modeling after indexing")
+    parser.add_argument("--citations", action="store_true",
+                        help="Run citation network analysis")
     args = parser.parse_args()
 
     run_pipeline(
@@ -221,4 +228,5 @@ if __name__ == "__main__":
         classify=args.classify,
         predict_new=args.predict_only,
         topics=args.topics,
+        citations=args.citations,
     )
