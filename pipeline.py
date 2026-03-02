@@ -22,13 +22,14 @@ from embed import embed_chunks, save_checkpoint
 from index import build_index, add_to_index, save_index, load_index
 from label import run_labeling
 from classify import train_outcome_model, train_claim_type_model, predict_outcomes, predict_claim_types, update_chunk_map_with_predictions
+from topics import run_topic_modeling
 
 logger = logging.getLogger(__name__)
 
 CHECKPOINT_BATCH = 500  # opinions per checkpoint
 
 
-def run_pipeline(sync_only=False, reindex=False, classify=False, predict_new=False):
+def run_pipeline(sync_only=False, reindex=False, classify=False, predict_new=False, topics=False):
     # Ensure data dirs exist
     os.makedirs(os.path.dirname(config.FAISS_INDEX), exist_ok=True)
     os.makedirs(config.CHECKPOINT_DIR, exist_ok=True)
@@ -191,6 +192,10 @@ def run_pipeline(sync_only=False, reindex=False, classify=False, predict_new=Fal
             update_chunk_map_with_predictions(engine)
         logger.info(f"Predicted {n1} outcomes, {n2} claim types")
 
+    if topics:
+        logger.info("Running topic modeling...")
+        run_topic_modeling(engine, refit=reindex)
+
 
 if __name__ == "__main__":
     logging.basicConfig(
@@ -207,6 +212,7 @@ if __name__ == "__main__":
     parser.add_argument("--reindex", action="store_true", help="Re-process all opinions")
     parser.add_argument("--classify", action="store_true", help="Run labeling + training + prediction")
     parser.add_argument("--predict-only", action="store_true", help="Predict new opinions with existing models")
+    parser.add_argument("--topics", action="store_true", help="Run topic modeling after indexing")
     args = parser.parse_args()
 
     run_pipeline(
@@ -214,4 +220,5 @@ if __name__ == "__main__":
         reindex=args.reindex,
         classify=args.classify,
         predict_new=args.predict_only,
+        topics=args.topics,
     )
