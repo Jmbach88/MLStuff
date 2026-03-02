@@ -72,7 +72,7 @@ def aggregate_opinion_embeddings(chunk_map, vectors):
 
 
 def fit_topics(opinion_ids, embeddings, docs, model_path=None,
-               umap_model=None, hdbscan_model=None):
+               umap_model=None, hdbscan_model=None, nr_topics=None):
     """Fits BERTopic with UMAP and HDBSCAN on opinion embeddings.
 
     Args:
@@ -82,6 +82,7 @@ def fit_topics(opinion_ids, embeddings, docs, model_path=None,
         model_path: path to save the BERTopic model (default: data/models/bertopic_v1.pkl)
         umap_model: optional pre-configured UMAP model
         hdbscan_model: optional pre-configured HDBSCAN model
+        nr_topics: optional target number of topics (merges similar topics)
 
     Returns:
         (topics, probs, topic_info)
@@ -113,6 +114,7 @@ def fit_topics(opinion_ids, embeddings, docs, model_path=None,
     topic_model = BERTopic(
         umap_model=umap_model,
         hdbscan_model=hdbscan_model,
+        nr_topics=nr_topics,
         verbose=True,
     )
 
@@ -210,7 +212,7 @@ def get_topic_summary(engine):
     return rows
 
 
-def run_topic_modeling(engine=None, refit=False):
+def run_topic_modeling(engine=None, refit=False, nr_topics=None):
     """Full topic modeling pipeline.
 
     1. Loads FAISS index and extracts vectors
@@ -254,10 +256,16 @@ def run_topic_modeling(engine=None, refit=False):
 
     # Fit topics
     if refit or not os.path.exists(DEFAULT_MODEL_PATH):
-        topics, probs, topic_info = fit_topics(opinion_ids, embeddings, docs)
+        topics, probs, topic_info = fit_topics(
+            opinion_ids, embeddings, docs, nr_topics=nr_topics,
+        )
     else:
         logger.info("Model already exists. Use --refit to retrain.")
         return
+
+    n_topics = len(set(t for t in topics if t != -1))
+    n_outliers = sum(1 for t in topics if t == -1)
+    logger.info(f"Found {n_topics} topics, {n_outliers} outliers")
 
     # Store assignments
     store_topic_assignments(engine, opinion_ids, topics, probs)
@@ -265,30 +273,28 @@ def run_topic_modeling(engine=None, refit=False):
     # Save 2D coordinates
     save_2d_coords(opinion_ids, embeddings)
 
-    # Save ModelRecord
+    # Save ModelRecord with topic words
+    top_topics = topic_info.head(min(n_topics, 50)).to_dict("records") if topic_info is not None else []
     session = get_session(engine)
     try:
         existing = session.query(ModelRecord).filter_by(name=MODEL_NAME).first()
         now = datetime.now(timezone.utc).isoformat()
+        params = {
+            "n_opinions": len(opinion_ids),
+            "n_topics": n_topics,
+            "n_outliers": n_outliers,
+            "nr_topics": nr_topics,
+            "top_topics": top_topics,
+        }
         if existing:
             existing.trained_at = now
-            existing.params_json = json.dumps({
-                "n_opinions": len(opinion_ids),
-                "n_topics": len(set(topics)),
-                "umap_dim": 5,
-                "min_cluster_size": 15,
-            })
+            existing.params_json = json.dumps(params, default=str)
         else:
             session.add(ModelRecord(
                 name=MODEL_NAME,
                 label_type="topic",
                 trained_at=now,
-                params_json=json.dumps({
-                    "n_opinions": len(opinion_ids),
-                    "n_topics": len(set(topics)),
-                    "umap_dim": 5,
-                    "min_cluster_size": 15,
-                }),
+                params_json=json.dumps(params, default=str),
             ))
         session.commit()
     finally:
@@ -301,6 +307,7 @@ def main():
     parser = argparse.ArgumentParser(description="Topic modeling pipeline")
     parser.add_argument("--refit", action="store_true", help="Clear and refit topics")
     parser.add_argument("--info", action="store_true", help="Print topic summary")
+    parser.add_argument("--nr-topics", type=int, default=None, help="Merge to target number of topics")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -319,7 +326,7 @@ def main():
                 print(f"{row[0]:<20} {row[1]:>8} {row[2]:>15.4f}")
         return
 
-    run_topic_modeling(engine=engine, refit=args.refit)
+    run_topic_modeling(engine=engine, refit=args.refit, nr_topics=args.nr_topics)
 
 
 if __name__ == "__main__":

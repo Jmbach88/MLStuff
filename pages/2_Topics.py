@@ -39,7 +39,7 @@ def load_topic_assignments(_engine):
         "opinion_id", "topic", "confidence",
         "title", "circuit", "court_type", "date_issued",
     ])
-    df["topic"] = df["topic"].astype(int)
+    df["topic"] = df["topic"].str.replace("topic_", "", regex=False).astype(int)
     return df
 
 
