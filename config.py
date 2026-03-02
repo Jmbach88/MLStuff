@@ -22,6 +22,6 @@ OVERSAMPLE_FACTOR = 5   # fetch 5x results for grouping
 
 # LLM Labeling (Ollama)
 OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "mistral:7b-instruct-v0.3-q4_K_M"
+OLLAMA_MODEL = "gemma2:2b"
 LLM_TEXT_LIMIT = 3000  # chars to send to LLM
 USE_LLM_LABELING = False  # toggle when Ollama is available

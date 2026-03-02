@@ -197,11 +197,18 @@ def label_with_llm(text_content: str) -> dict:
     try:
         response = requests.post(
             config.OLLAMA_URL,
-            json={"model": config.OLLAMA_MODEL, "prompt": prompt, "stream": False},
-            timeout=120,
+            json={"model": config.OLLAMA_MODEL, "prompt": prompt, "stream": True},
+            timeout=600,
+            stream=True,
         )
         response.raise_for_status()
-        result_text = response.json().get("response", "")
+        result_text = ""
+        for line in response.iter_lines():
+            if line:
+                chunk = _json.loads(line)
+                result_text += chunk.get("response", "")
+                if chunk.get("done", False):
+                    break
         return _parse_llm_response(result_text)
     except requests.ConnectionError:
         logger.error("Cannot connect to Ollama. Is it running?")

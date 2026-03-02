@@ -238,11 +238,13 @@ class TestLLMLabeling:
     @patch("label.requests.post")
     def test_label_with_llm_success(self, mock_post):
         from label import label_with_llm
+        import json
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "response": '{"outcome": "plaintiff_win", "confidence": 0.9}'
-        }
+        mock_response.raise_for_status = MagicMock()
+        # Simulate streaming: iter_lines yields JSON chunks
+        chunk = json.dumps({"response": '{"outcome": "plaintiff_win", "confidence": 0.9}', "done": True}).encode()
+        mock_response.iter_lines.return_value = [chunk]
         mock_post.return_value = mock_response
         result = label_with_llm("The court grants judgment for plaintiff.")
         assert result["label"] == "plaintiff_win"
