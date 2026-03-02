@@ -117,6 +117,17 @@ class OpinionMetric(Base):
     community_id = Column(Integer)
 
 
+class Entity(Base):
+    __tablename__ = "entities"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    opinion_id = Column(Integer, ForeignKey("opinions.id"), nullable=False)
+    entity_type = Column(Text, nullable=False)
+    entity_value = Column(Text, nullable=False)
+    context_snippet = Column(Text)
+    start_char = Column(Integer)
+    end_char = Column(Integer)
+
+
 def get_local_engine():
     db_path = os.environ.get("ML_LOCAL_DB", config.LOCAL_DB)
     if db_path == ":memory:":

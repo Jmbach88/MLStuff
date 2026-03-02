@@ -25,3 +25,6 @@ OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "gemma2:2b"
 LLM_TEXT_LIMIT = 3000  # chars to send to LLM
 USE_LLM_LABELING = False  # toggle when Ollama is available
+
+# NER
+SPACY_MODEL = "en_core_web_sm"  # upgrade to en_core_web_trf for GPU
