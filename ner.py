@@ -360,11 +360,21 @@ def extract_entities_from_opinion(title, text_content, use_spacy=False, nlp=None
     return entities
 
 
-def store_entities(engine, opinion_id, entities):
-    """Store extracted entities for one opinion. Clears existing entities first."""
+def store_entities(engine, opinion_id, entities, entity_types=None):
+    """Store extracted entities for one opinion.
+
+    If entity_types is None, clears ALL existing entities first.
+    If entity_types is provided, only clears those specific types.
+    """
     session = get_session(engine)
     try:
-        session.query(Entity).filter_by(opinion_id=opinion_id).delete()
+        if entity_types:
+            for etype in entity_types:
+                session.query(Entity).filter_by(
+                    opinion_id=opinion_id, entity_type=etype.upper()
+                ).delete()
+        else:
+            session.query(Entity).filter_by(opinion_id=opinion_id).delete()
         session.commit()
 
         for ent in entities:
@@ -417,7 +427,7 @@ def run_ner_extraction(engine=None, entity_types=None, use_spacy=True):
             entities = [e for e in entities if e["entity_type"] in allowed]
 
         if entities:
-            store_entities(engine, opinion_id, entities)
+            store_entities(engine, opinion_id, entities, entity_types=entity_types)
             total_entities += len(entities)
 
         if (i + 1) % 5000 == 0:
