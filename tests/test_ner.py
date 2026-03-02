@@ -196,6 +196,100 @@ class TestDebtTypeExtraction:
         assert any("auto loan" in r["entity_value"].lower() for r in results)
 
 
+class TestDefenseTypeExtraction:
+    def test_bona_fide_error(self):
+        from ner import extract_defense_types
+        text = "Defendant raised a bona fide error defense under the FDCPA."
+        results = extract_defense_types(text)
+        assert len(results) >= 1
+        assert any("bona fide error" in r["entity_value"] for r in results)
+
+    def test_statute_of_limitations(self):
+        from ner import extract_defense_types
+        text = "The defendant argues the statute of limitations has expired."
+        results = extract_defense_types(text)
+        assert len(results) >= 1
+        assert any("statute of limitations" in r["entity_value"] for r in results)
+
+    def test_res_judicata(self):
+        from ner import extract_defense_types
+        text = "The doctrine of res judicata bars this action."
+        results = extract_defense_types(text)
+        assert len(results) >= 1
+        assert any("res judicata" in r["entity_value"] for r in results)
+
+    def test_claim_preclusion(self):
+        from ner import extract_defense_types
+        text = "Defendant invokes claim preclusion to dismiss the complaint."
+        results = extract_defense_types(text)
+        assert len(results) >= 1
+        assert any("claim preclusion" in r["entity_value"] for r in results)
+
+    def test_collateral_estoppel(self):
+        from ner import extract_defense_types
+        text = "The court considers whether collateral estoppel applies here."
+        results = extract_defense_types(text)
+        assert len(results) >= 1
+        assert any("collateral estoppel" in r["entity_value"] for r in results)
+
+    def test_failure_to_state_a_claim(self):
+        from ner import extract_defense_types
+        text = "Motion to dismiss for failure to state a claim under Rule 12(b)(6)."
+        results = extract_defense_types(text)
+        assert len(results) >= 1
+        assert any("failure to state a claim" in r["entity_value"] for r in results)
+
+    def test_qualified_immunity(self):
+        from ner import extract_defense_types
+        text = "The officer asserted qualified immunity as a defense."
+        results = extract_defense_types(text)
+        assert len(results) >= 1
+        assert any("qualified immunity" in r["entity_value"] for r in results)
+
+    def test_arbitration(self):
+        from ner import extract_defense_types
+        text = "Defendant moved to compel arbitration under the contract."
+        results = extract_defense_types(text)
+        assert len(results) >= 1
+        assert any("arbitration" in r["entity_value"] for r in results)
+
+    def test_no_defense(self):
+        from ner import extract_defense_types
+        text = "The court finds for the plaintiff on all counts."
+        results = extract_defense_types(text)
+        assert len(results) == 0
+
+    def test_multiple_defenses(self):
+        from ner import extract_defense_types
+        text = (
+            "Defendant raised a bona fide error defense, argued the statute of limitations "
+            "had run, and moved to compel arbitration under the contract terms."
+        )
+        results = extract_defense_types(text)
+        assert len(results) >= 3
+        values = {r["entity_value"] for r in results}
+        assert "bona fide error" in values
+        assert "statute of limitations" in values
+        assert "arbitration" in values
+
+    def test_deduplication(self):
+        from ner import extract_defense_types
+        text = (
+            "The bona fide error defense was raised in the answer. "
+            "The court then analyzed the bona fide error defense in detail."
+        )
+        results = extract_defense_types(text)
+        bfe = [r for r in results if r["entity_value"] == "bona fide error"]
+        assert len(bfe) == 1
+
+    def test_consent_tcpa(self):
+        from ner import extract_defense_types
+        text = "Defendant argued that plaintiff gave prior express consent to receive calls."
+        results = extract_defense_types(text)
+        assert len(results) >= 1
+        assert any("prior express consent" in r["entity_value"] for r in results)
+
+
 class TestEntityStorage:
     def test_store_entities(self):
         from ner import store_entities

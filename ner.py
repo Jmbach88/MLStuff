@@ -54,6 +54,36 @@ CREDITOR_CONTEXTS = [
     re.compile(r'successor\s+to\s+([A-Z][A-Za-z\s,\.]+?)(?:\.|,|\s+and\s)', re.IGNORECASE),
 ]
 
+# --- Defense type patterns ---
+DEFENSE_TYPES = [
+    "bona fide error",
+    "statute of limitations",
+    "standing",
+    "rooker-feldman",
+    "res judicata",
+    "claim preclusion",
+    "collateral estoppel",
+    "issue preclusion",
+    "preemption",
+    "sovereign immunity",
+    "qualified immunity",
+    "failure to state a claim",
+    "mootness",
+    "ripeness",
+    "abstention",
+    "arbitration",
+    "good faith",
+    "fair use",
+    "consent",
+    "established business relationship",
+    "prior express consent",
+]
+
+DEFENSE_TYPE_PATTERN = re.compile(
+    r'\b(' + '|'.join(re.escape(dt) for dt in DEFENSE_TYPES) + r')\b',
+    re.IGNORECASE,
+)
+
 
 def extract_parties_from_title(title):
     """Extract plaintiff and defendant from opinion title.
@@ -242,6 +272,33 @@ def extract_original_creditors(text_content):
     return results
 
 
+def extract_defense_types(text_content):
+    """Extract defense type keywords from opinion text.
+    Searches full text. Returns list of entity dicts with entity_type='DEFENSE_TYPE'.
+    Deduplicates per opinion.
+    """
+    if not text_content:
+        return []
+    results = []
+    seen = set()
+    for match in DEFENSE_TYPE_PATTERN.finditer(text_content):
+        value = match.group(1).lower()
+        if value in seen:
+            continue
+        seen.add(value)
+        snip_start = max(0, match.start() - CONTEXT_CHARS)
+        snip_end = min(len(text_content), match.end() + CONTEXT_CHARS)
+        context = text_content[snip_start:snip_end].strip()
+        results.append({
+            "entity_type": "DEFENSE_TYPE",
+            "entity_value": value,
+            "context_snippet": context,
+            "start_char": match.start(),
+            "end_char": match.end(),
+        })
+    return results
+
+
 def extract_entities_from_opinion(title, text_content, use_spacy=False, nlp=None):
     """Extract all entity types from one opinion.
 
@@ -277,6 +334,7 @@ def extract_entities_from_opinion(title, text_content, use_spacy=False, nlp=None
     entities.extend(extract_dollar_amounts(text_content))
     entities.extend(extract_debt_types(text_content))
     entities.extend(extract_original_creditors(text_content))
+    entities.extend(extract_defense_types(text_content))
 
     if use_spacy and text_content:
         if nlp is None:
