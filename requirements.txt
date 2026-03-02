@@ -13,3 +13,4 @@ fast-hdbscan>=0.2.0
 plotly>=5.0.0
 networkx>=3.0
 spacy>=3.7.0
+scipy>=1.10.0
