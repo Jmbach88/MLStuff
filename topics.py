@@ -345,11 +345,119 @@ def run_topic_modeling(engine=None, refit=False, nr_topics=None):
     logger.info("Topic modeling pipeline complete.")
 
 
+def relabel_topics(engine=None, model_name=None):
+    """Use Ollama LLM to generate clean topic labels from keywords.
+
+    Loads the saved BERTopic model, extracts keywords per topic,
+    sends them to Ollama via OpenAI-compatible API, and stores
+    the clean labels in the models table params_json.
+
+    Args:
+        engine: SQLAlchemy engine (default: creates one)
+        model_name: Ollama model to use (default: config.OLLAMA_MODEL)
+    """
+    try:
+        from openai import OpenAI
+    except ImportError:
+        logger.error("openai package required for relabeling. Install with: pip install openai")
+        return
+
+    if engine is None:
+        engine = get_local_engine()
+        init_local_db(engine)
+
+    if model_name is None:
+        model_name = config.OLLAMA_MODEL
+
+    # Load saved BERTopic model
+    if not os.path.exists(DEFAULT_MODEL_PATH):
+        logger.error("No BERTopic model found. Run `python topics.py --refit` first.")
+        return
+
+    from bertopic import BERTopic
+    topic_model = BERTopic.load(DEFAULT_MODEL_PATH)
+
+    topic_info = topic_model.get_topic_info()
+    # Filter out outlier topic (-1)
+    topic_ids = [t for t in topic_info["Topic"].tolist() if t != -1]
+
+    if not topic_ids:
+        logger.warning("No topics found in model.")
+        return
+
+    logger.info(f"Relabeling {len(topic_ids)} topics using {model_name}...")
+
+    client = OpenAI(
+        base_url=config.OLLAMA_OPENAI_BASE,
+        api_key="ollama",  # Ollama doesn't require a real key
+    )
+
+    custom_labels = {}
+    for i, tid in enumerate(topic_ids):
+        keywords = topic_model.get_topic(tid)
+        if not keywords:
+            continue
+
+        # keywords is list of (word, score) tuples — take top 10
+        top_words = [w for w, _ in keywords[:10]]
+        keyword_str = ", ".join(top_words)
+
+        prompt = (
+            f"These keywords describe a topic found in federal court opinions "
+            f"about debt collection and consumer protection law:\n\n"
+            f"Keywords: {keyword_str}\n\n"
+            f"Generate a short, descriptive label (2-5 words) for this topic. "
+            f"Return ONLY the label, nothing else."
+        )
+
+        try:
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=30,
+            )
+            label = response.choices[0].message.content.strip().strip('"').strip("'")
+            custom_labels[tid] = label
+            logger.info(f"  [{i+1}/{len(topic_ids)}] Topic {tid}: {label}")
+        except Exception as e:
+            logger.warning(f"  [{i+1}/{len(topic_ids)}] Topic {tid}: LLM error: {e}")
+            continue
+
+    if not custom_labels:
+        logger.warning("No labels generated.")
+        return
+
+    # Update params_json in DB with custom_labels
+    session = get_session(engine)
+    try:
+        model_record = session.query(ModelRecord).filter_by(name=MODEL_NAME).first()
+        if model_record and model_record.params_json:
+            params = json.loads(model_record.params_json)
+        else:
+            params = {}
+
+        params["custom_labels"] = {str(k): v for k, v in custom_labels.items()}
+        params["relabel_model"] = model_name
+        params["relabeled_at"] = datetime.now(timezone.utc).isoformat()
+
+        if model_record:
+            model_record.params_json = json.dumps(params, default=str)
+        session.commit()
+        logger.info(f"Stored {len(custom_labels)} custom topic labels.")
+    finally:
+        session.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Topic modeling pipeline")
     parser.add_argument("--refit", action="store_true", help="Clear and refit topics")
     parser.add_argument("--info", action="store_true", help="Print topic summary")
     parser.add_argument("--nr-topics", type=int, default=None, help="Merge to target number of topics")
+    parser.add_argument("--relabel", action="store_true",
+                        help="Use LLM to generate clean topic labels")
+    parser.add_argument("--relabel-model", type=str, default=None,
+                        help="Ollama model for relabeling (default: config.OLLAMA_MODEL)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -362,10 +470,25 @@ def main():
         if not rows:
             print("No topic assignments found.")
         else:
-            print(f"{'Topic':<20} {'Count':>8} {'Avg Confidence':>15}")
-            print("-" * 45)
+            # Load custom labels if available
+            session = get_session(engine)
+            model_record = session.query(ModelRecord).filter_by(name=MODEL_NAME).first()
+            session.close()
+            custom_labels = {}
+            if model_record and model_record.params_json:
+                params = json.loads(model_record.params_json)
+                custom_labels = params.get("custom_labels", {})
+
+            print(f"{'Topic':<20} {'Count':>8} {'Avg Conf':>10} {'Label'}")
+            print("-" * 70)
             for row in rows:
-                print(f"{row[0]:<20} {row[1]:>8} {row[2]:>15.4f}")
+                topic_num = row[0].replace("topic_", "")
+                label = custom_labels.get(topic_num, "")
+                print(f"{row[0]:<20} {row[1]:>8} {row[2]:>10.4f} {label}")
+        return
+
+    if args.relabel:
+        relabel_topics(engine=engine, model_name=args.relabel_model)
         return
 
     run_topic_modeling(engine=engine, refit=args.refit, nr_topics=args.nr_topics)

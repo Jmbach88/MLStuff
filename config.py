@@ -26,5 +26,8 @@ OLLAMA_MODEL = "gemma2:2b"
 LLM_TEXT_LIMIT = 3000  # chars to send to LLM
 USE_LLM_LABELING = False  # toggle when Ollama is available
 
+# Ollama OpenAI-compatible endpoint (for topic relabeling)
+OLLAMA_OPENAI_BASE = "http://localhost:11434/v1"
+
 # NER
 SPACY_MODEL = "en_core_web_sm"  # upgrade to en_core_web_trf for GPU

@@ -52,9 +52,10 @@ def load_top_topics(_engine):
     )).fetchone()
     session.close()
     if row is None or row[0] is None:
-        return []
+        return [], {}
     params = json.loads(row[0])
-    return params.get("top_topics", [])
+    custom_labels = params.get("custom_labels", {})
+    return params.get("top_topics", []), custom_labels
 
 
 @st.cache_data
@@ -88,7 +89,7 @@ if df_all.empty:
     st.warning("No topic assignments found. Run `python topics.py` to fit topics.")
     st.stop()
 
-top_topics = load_top_topics(engine)
+top_topics, custom_labels = load_top_topics(engine)
 df_statutes = load_opinion_statutes(engine)
 
 # --- Sidebar Filters ---
@@ -166,7 +167,14 @@ def extract_top_words(topic_id):
         return ", ".join(parts[1:])
     return name
 
-topic_counts["Top Words"] = topic_counts["Topic"].apply(extract_top_words)
+def get_topic_label(topic_id):
+    """Get custom LLM label if available, otherwise fall back to keywords."""
+    label = custom_labels.get(str(topic_id), "")
+    if label:
+        return label
+    return extract_top_words(topic_id)
+
+topic_counts["Top Words"] = topic_counts["Topic"].apply(get_topic_label)
 topic_counts = topic_counts.sort_values("Count", ascending=False).reset_index(drop=True)
 topic_counts["Percentage"] = topic_counts["Percentage"].apply(lambda x: f"{x}%")
 
@@ -178,7 +186,7 @@ st.subheader("Top 20 Topics by Opinion Count")
 top20 = topic_counts.head(20).copy()
 top20["Percentage"] = top20["Percentage"].str.rstrip("%").astype(float)
 top20["Label"] = top20["Topic"].apply(
-    lambda t: f"Topic {t}: {extract_top_words(t)[:40]}"
+    lambda t: f"Topic {t}: {get_topic_label(t)[:40]}"
 )
 top20 = top20.sort_values("Count", ascending=True)
 
@@ -212,7 +220,9 @@ if opinion_ids_coords is not None and coords is not None:
     )
     if not df_scatter.empty:
         df_scatter["topic_label"] = df_scatter["topic"].apply(
-            lambda t: "Outlier" if t == -1 else f"Topic {t}"
+            lambda t: "Outlier" if t == -1 else (
+                f"Topic {t}: {get_topic_label(t)[:30]}" if get_topic_label(t) else f"Topic {t}"
+            )
         )
         # Sort so outliers render behind real topics
         df_scatter = df_scatter.sort_values("topic", ascending=False)
@@ -253,7 +263,9 @@ top10_topics = (
 df_time = df_time[df_time["topic"].isin(top10_topics)]
 
 evolution = df_time.groupby(["year", "topic"]).size().reset_index(name="count")
-evolution["topic_label"] = evolution["topic"].apply(lambda t: f"Topic {t}")
+evolution["topic_label"] = evolution["topic"].apply(
+    lambda t: f"Topic {t}: {get_topic_label(t)[:30]}" if get_topic_label(t) else f"Topic {t}"
+)
 
 fig_line = px.line(
     evolution, x="year", y="count", color="topic_label",

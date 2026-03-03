@@ -1,10 +1,14 @@
+import importlib
+import json
 import os
+from unittest.mock import patch, MagicMock
 import pytest
 import numpy as np
 
 os.environ["ML_LOCAL_DB"] = ":memory:"
 
 from db import get_local_engine, init_local_db, get_session, Prediction, Opinion
+from db import Model as ModelRecord
 
 
 def _make_chunk_map_and_vectors():
@@ -177,3 +181,204 @@ class TestTopicStorage:
         confidences = {p.opinion_id: p.confidence for p in preds}
         assert abs(confidences[1] - 0.95) < 1e-6
         session.close()
+
+
+class TestRelabelTopics:
+    """Tests for LLM-based topic relabeling."""
+
+    def _setup_model_record(self, engine):
+        """Create a model record with topic info for testing."""
+        session = get_session(engine)
+        from sqlalchemy import text as sql_text
+        session.execute(sql_text("DELETE FROM models"))
+        session.commit()
+
+        params = {
+            "n_opinions": 100,
+            "n_topics": 3,
+            "n_outliers": 5,
+            "top_topics": [
+                {"Topic": 0, "Name": "0_debt_collection_agency"},
+                {"Topic": 1, "Name": "1_credit_card_dispute"},
+                {"Topic": 2, "Name": "2_statute_limitations_defense"},
+            ],
+        }
+        session.add(ModelRecord(
+            name="bertopic_v1",
+            label_type="topic",
+            trained_at="2026-01-01T00:00:00",
+            params_json=json.dumps(params),
+        ))
+        session.commit()
+        session.close()
+
+    def _mock_bertopic_model(self):
+        """Create a mock BERTopic model with topic keywords."""
+        mock_model = MagicMock()
+        mock_model.get_topic_info.return_value = MagicMock()
+        mock_model.get_topic_info.return_value.__getitem__ = MagicMock(
+            side_effect=lambda key: {
+                "Topic": [-1, 0, 1, 2],
+            }[key]
+        )
+        # get_topic_info()["Topic"].tolist()
+        topic_series = MagicMock()
+        topic_series.tolist.return_value = [-1, 0, 1, 2]
+        mock_model.get_topic_info.return_value.__getitem__ = MagicMock(return_value=topic_series)
+
+        mock_model.get_topic.side_effect = lambda tid: {
+            0: [("debt", 0.9), ("collection", 0.8), ("agency", 0.7)],
+            1: [("credit", 0.9), ("card", 0.8), ("dispute", 0.7)],
+            2: [("statute", 0.9), ("limitations", 0.8), ("defense", 0.7)],
+        }.get(tid, [])
+        return mock_model
+
+    def _mock_openai_response(self, label):
+        """Create a mock OpenAI chat completion response."""
+        mock_choice = MagicMock()
+        mock_choice.message.content = label
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        return mock_response
+
+    def _patch_relabel_deps(self, mock_model, mock_client):
+        """Context manager helper to patch BERTopic and OpenAI inside relabel_topics."""
+        mock_bertopic_cls = MagicMock()
+        mock_bertopic_cls.load.return_value = mock_model
+        mock_openai_cls = MagicMock(return_value=mock_client)
+
+        # Patch the imports inside relabel_topics
+        import importlib
+        mock_openai_module = MagicMock()
+        mock_openai_module.OpenAI = mock_openai_cls
+        mock_bertopic_module = MagicMock()
+        mock_bertopic_module.BERTopic = mock_bertopic_cls
+
+        return patch.dict("sys.modules", {
+            "openai": mock_openai_module,
+            "bertopic": mock_bertopic_module,
+        })
+
+    def test_relabel_stores_custom_labels(self):
+        import topics
+        importlib.reload(topics)  # reload to pick up fresh module state
+
+        engine = get_local_engine()
+        init_local_db(engine)
+        self._setup_model_record(engine)
+
+        mock_model = self._mock_bertopic_model()
+        mock_client = MagicMock()
+        labels = iter(["Debt Collection Practices", "Credit Card Disputes", "Statute of Limitations"])
+        mock_client.chat.completions.create.side_effect = lambda **kwargs: self._mock_openai_response(next(labels))
+
+        with self._patch_relabel_deps(mock_model, mock_client), \
+             patch("topics.os.path.exists", return_value=True):
+            importlib.reload(topics)
+            topics.relabel_topics(engine=engine, model_name="llama3.1:latest")
+
+        session = get_session(engine)
+        record = session.query(ModelRecord).filter_by(name="bertopic_v1").first()
+        params = json.loads(record.params_json)
+        session.close()
+
+        assert "custom_labels" in params
+        assert params["custom_labels"]["0"] == "Debt Collection Practices"
+        assert params["custom_labels"]["1"] == "Credit Card Disputes"
+        assert params["custom_labels"]["2"] == "Statute of Limitations"
+        assert params["relabel_model"] == "llama3.1:latest"
+        assert "relabeled_at" in params
+
+    def test_relabel_preserves_existing_params(self):
+        import topics
+        engine = get_local_engine()
+        init_local_db(engine)
+        self._setup_model_record(engine)
+
+        mock_model = self._mock_bertopic_model()
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = self._mock_openai_response("Test Label")
+
+        with self._patch_relabel_deps(mock_model, mock_client), \
+             patch("topics.os.path.exists", return_value=True):
+            importlib.reload(topics)
+            topics.relabel_topics(engine=engine)
+
+        session = get_session(engine)
+        record = session.query(ModelRecord).filter_by(name="bertopic_v1").first()
+        params = json.loads(record.params_json)
+        session.close()
+
+        assert params["n_topics"] == 3
+        assert params["n_opinions"] == 100
+        assert len(params["top_topics"]) == 3
+        assert "custom_labels" in params
+
+    def test_relabel_handles_llm_error(self):
+        import topics
+        engine = get_local_engine()
+        init_local_db(engine)
+        self._setup_model_record(engine)
+
+        mock_model = self._mock_bertopic_model()
+        mock_client = MagicMock()
+
+        call_count = 0
+        def side_effect(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise Exception("Connection refused")
+            return self._mock_openai_response("Good Label")
+
+        mock_client.chat.completions.create.side_effect = side_effect
+
+        with self._patch_relabel_deps(mock_model, mock_client), \
+             patch("topics.os.path.exists", return_value=True):
+            importlib.reload(topics)
+            topics.relabel_topics(engine=engine)
+
+        session = get_session(engine)
+        record = session.query(ModelRecord).filter_by(name="bertopic_v1").first()
+        params = json.loads(record.params_json)
+        session.close()
+
+        assert len(params["custom_labels"]) == 2
+        assert "0" in params["custom_labels"]
+        assert "2" in params["custom_labels"]
+
+    def test_relabel_no_model_file(self):
+        """relabel_topics returns early if no model file exists."""
+        import topics
+
+        engine = get_local_engine()
+        init_local_db(engine)
+
+        mock_openai_module = MagicMock()
+        with patch.dict("sys.modules", {"openai": mock_openai_module}), \
+             patch("topics.os.path.exists", return_value=False):
+            importlib.reload(topics)
+            # Should not raise
+            topics.relabel_topics(engine=engine)
+
+    def test_relabel_strips_quotes_from_response(self):
+        import topics
+        engine = get_local_engine()
+        init_local_db(engine)
+        self._setup_model_record(engine)
+
+        mock_model = self._mock_bertopic_model()
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = self._mock_openai_response('"Debt Collection"')
+
+        with self._patch_relabel_deps(mock_model, mock_client), \
+             patch("topics.os.path.exists", return_value=True):
+            importlib.reload(topics)
+            topics.relabel_topics(engine=engine)
+
+        session = get_session(engine)
+        record = session.query(ModelRecord).filter_by(name="bertopic_v1").first()
+        params = json.loads(record.params_json)
+        session.close()
+
+        assert params["custom_labels"]["0"] == "Debt Collection"

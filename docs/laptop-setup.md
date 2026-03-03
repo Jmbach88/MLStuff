@@ -106,6 +106,22 @@ python -m streamlit run app.py --server.headless true
 
 Open http://localhost:8501 in your browser.
 
+## Optional: LLM Topic Relabeling
+
+After Ollama is running, you can use the LLM to generate clean topic labels:
+
+```bash
+pip install openai
+python topics.py --relabel --relabel-model llama3.1:latest
+```
+
+This sends each topic's keywords to the LLM and gets back a short descriptive label (e.g., "Debt Collection Practices" instead of "0_debt_collection_agency"). Labels are stored in the DB and the Topics dashboard will show them automatically.
+
+Check results:
+```bash
+python topics.py --info
+```
+
 ## Optional: GPU Upgrades
 
 ### spaCy Transformer Model (better NER)
